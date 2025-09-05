@@ -1,0 +1,131 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <title>HTTP/3 Test Server - Windows</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 40px; background: #f0f2f5; }
+        .container { background: white; padding: 30px; border-radius: 10px; box-shadow: 0 2px 10px rgba(0,0,0,0.1); }
+        .protocol { color: #007acc; font-weight: bold; font-size: 1.2em; }
+        .http3 { color: #ff6b35; }
+        button { background: #007acc; color: white; border: none; padding: 10px 20px; border-radius: 5px; cursor: pointer; margin: 10px 0; }
+        button:hover { background: #005a9e; }
+        #result { margin-top: 20px; padding: 15px; background: #f8f9fa; border-radius: 5px; }
+        .success { border-left: 4px solid #28a745; }
+        .error { border-left: 4px solid #dc3545; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>HTTP/3 Test Server (Windows)</h1>
+        <p>This page is served over <span id="protocol" class="protocol">checking...</span></p>
+        
+        <h3>Tests:</h3>
+        <button onclick="testAPI()">Test API Endpoint</button>
+        <button onclick="testProtocol()">Check Protocol</button>
+        <button onclick="testMultiple()">Multiple Requests</button>
+        
+        <div id="result"></div>
+        
+        <h3>Command Line Tests:</h3>
+        <pre style="background: #2d3748; color: #e2e8f0; padding: 15px; border-radius: 5px; overflow-x: auto;">
+curl -v --http3-only -k https://localhost:9444/api/test
+curl -v --http2 -k https://localhost:9444/api/test
+curl -v http://localhost:8080/api/test</pre>
+    </div>
+    
+    <script>
+        function updateProtocol() {
+            const isHTTPS = window.location.protocol === 'https:';
+            let protocolText = isHTTPS ? 'HTTPS' : 'HTTP';
+            
+            if (isHTTPS) {
+                if (navigator.userAgent.includes('Chrome') || navigator.userAgent.includes('Edge')) {
+                    protocolText = 'HTTPS (HTTP/3 capable browser)';
+                }
+            }
+            
+            document.getElementById('protocol').textContent = protocolText;
+            if (protocolText.includes('HTTP/3')) {
+                document.getElementById('protocol').className = 'protocol http3';
+            }
+        }
+        
+        async function testAPI() {
+            showResult('Testing API endpoint...', 'info');
+            try {
+                const start = performance.now();
+                const response = await fetch('/api/test');
+                const end = performance.now();
+                const data = await response.json();
+                
+                showResult('<strong>API Test Successful!</strong><br><strong>Response time:</strong> ' + (end - start).toFixed(2) + 'ms<br><strong>Protocol:</strong> ' + data.protocol + '<br><strong>Response:</strong><br><pre>' + JSON.stringify(data, null, 2) + '</pre>', 'success');
+            } catch (error) {
+                showResult('<strong>API Test Failed:</strong><br>' + error.message, 'error');
+            }
+        }
+        
+        async function testProtocol() {
+            showResult('Checking protocol support...', 'info');
+            try {
+                const response = await fetch('/api/test');
+                const data = await response.json();
+                const isHTTP3 = data.protocol.includes('HTTP/3');
+                
+                showResult('<strong>Protocol Check:</strong><br><strong>Current Protocol:</strong> ' + data.protocol + '<br><strong>HTTP/3 Active:</strong> ' + (isHTTP3 ? 'Yes!' : 'No (using fallback)') + (isHTTP3 ? '' : '<br><em>Try refreshing the page a few times to activate HTTP/3</em>'), isHTTP3 ? 'success' : 'info');
+            } catch (error) {
+                showResult('<strong>Protocol Check Failed:</strong><br>' + error.message, 'error');
+            }
+        }
+        
+        async function testMultiple() {
+            showResult('Running multiple requests to test protocol negotiation...', 'info');
+            const results = [];
+            
+            for (let i = 0; i < 5; i++) {
+                try {
+                    const start = performance.now();
+                    const response = await fetch('/api/test?test=' + (i + 1));
+                    const end = performance.now();
+                    const data = await response.json();
+                    results.push({
+                        test: i + 1,
+                        protocol: data.protocol,
+                        time: (end - start).toFixed(2)
+                    });
+                } catch (error) {
+                    results.push({
+                        test: i + 1,
+                        error: error.message
+                    });
+                }
+                
+                await new Promise(resolve => setTimeout(resolve, 100));
+            }
+            
+            const http3Count = results.filter(r => r.protocol && r.protocol.includes('HTTP/3')).length;
+            let resultHTML = '<strong>Multiple Request Test Results:</strong><br><strong>HTTP/3 requests:</strong> ' + http3Count + '/5<br><br>';
+            
+            for (let r of results) {
+                resultHTML += '<strong>Test ' + r.test + ':</strong> ';
+                if (r.error) {
+                    resultHTML += 'Error: ' + r.error;
+                } else {
+                    resultHTML += r.protocol + ' (' + r.time + 'ms)';
+                }
+                resultHTML += '<br>';
+            }
+            
+            showResult(resultHTML, http3Count > 0 ? 'success' : 'info');
+        }
+        
+        function showResult(message, type) {
+            const resultDiv = document.getElementById('result');
+            resultDiv.innerHTML = message;
+            resultDiv.className = type || 'info';
+        }
+        
+        updateProtocol();
+        setInterval(updateProtocol, 5000);
+    </script>
+</body>
+</html>
