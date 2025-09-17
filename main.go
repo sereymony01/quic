@@ -53,6 +53,9 @@ func main() {
 	fs := http.FileServer(http.Dir("./static/"))
 	mux.Handle("/", fs)
 
+	// Connection tracking for migration testing
+	connectionMap := make(map[string][]string)
+
 	// API endpoint
 	mux.HandleFunc("/api/test", func(w http.ResponseWriter, r *http.Request) {
 		protocol := r.Proto
@@ -74,6 +77,61 @@ func main() {
 			r.URL.Query().Get("test"), time.Now().Format("15:04:05"), len(r.Header))
 	})
 
+	// Connection migration test endpoint
+	mux.HandleFunc("/api/migration", func(w http.ResponseWriter, r *http.Request) {
+		sessionID := r.URL.Query().Get("session")
+		if sessionID == "" {
+			sessionID = fmt.Sprintf("session_%d", time.Now().Unix())
+		}
+
+		clientIP := r.RemoteAddr
+		protocol := r.Proto
+		if r.Proto == "HTTP/3.0" {
+			protocol = "HTTP/3.0 🚀"
+		}
+
+		// Track IP changes for this session
+		if connectionMap[sessionID] == nil {
+			connectionMap[sessionID] = []string{}
+		}
+
+		// Check if this is a new IP for this session
+		isMigration := false
+		for _, ip := range connectionMap[sessionID] {
+			if ip == clientIP {
+				break
+			}
+		}
+
+		if len(connectionMap[sessionID]) > 0 && !isMigration {
+			// Check if IP actually changed
+			lastIP := connectionMap[sessionID][len(connectionMap[sessionID])-1]
+			if lastIP != clientIP {
+				isMigration = true
+			}
+		}
+
+		connectionMap[sessionID] = append(connectionMap[sessionID], clientIP)
+
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Access-Control-Allow-Origin", "*")
+		w.Header().Set("Cache-Control", "no-cache")
+
+		fmt.Fprintf(w, `{
+  "session_id": "%s",
+  "protocol": "%s",
+  "current_ip": "%s",
+  "ip_history": %s,
+  "migration_detected": %t,
+  "connection_count": %d,
+  "timestamp": "%s",
+  "server_time": %d
+}`, sessionID, protocol, clientIP,
+			fmt.Sprintf("[%s]", strings.Join(connectionMap[sessionID], ", ")),
+			isMigration, len(connectionMap[sessionID]),
+			time.Now().Format("15:04:05"), time.Now().Unix())
+	})
+
 	// Logging middleware
 	loggedMux := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		protocol := r.Proto
@@ -82,7 +140,21 @@ func main() {
 			protocol = "HTTP/3.0 🚀"
 			emoji = "🚀"
 		}
-		log.Printf("%s %s %s %s (Protocol: %s)", emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
+
+		// Check if this is a migration endpoint call
+		if strings.Contains(r.URL.Path, "/api/migration") {
+			sessionID := r.URL.Query().Get("session")
+			if sessionID != "" {
+				log.Printf("%s %s %s %s (Protocol: %s, Session: %s)",
+					emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol, sessionID)
+			} else {
+				log.Printf("%s %s %s %s (Protocol: %s, NEW SESSION)",
+					emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
+			}
+		} else {
+			log.Printf("%s %s %s %s (Protocol: %s)",
+				emoji, r.RemoteAddr, r.Method, r.URL.Path, protocol)
+		}
 
 		// Set Alt-Svc header for HTTP/3 advertisement
 		w.Header().Set("Alt-Svc", `h3=":9444"; ma=86400`)
@@ -91,12 +163,15 @@ func main() {
 		mux.ServeHTTP(w, r)
 	})
 
-	// TLS configuration
+	// TLS configuration optimized for connection migration
 	tlsConfig := &tls.Config{
 		MinVersion: tls.VersionTLS12,
 		MaxVersion: tls.VersionTLS13,
 		NextProtos: []string{"h3", "h2", "http/1.1"},
 		ClientAuth: tls.NoClientCert,
+		// Enable session resumption to help with connection migration
+		SessionTicketsDisabled: false,
+		ClientSessionCache:     tls.NewLRUClientSessionCache(256),
 	}
 
 	// Start HTTP/1.1 & HTTP/2 server (TCP)

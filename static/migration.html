@@ -1,0 +1,319 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HTTP/3 Connection Migration Test</title>
+    <style>
+        body { 
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', sans-serif; 
+            margin: 10px; 
+            background: #f5f5f5; 
+            font-size: 16px;
+        }
+        .container { 
+            background: white; 
+            padding: 20px; 
+            border-radius: 10px; 
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1); 
+            max-width: 600px;
+            margin: 0 auto;
+        }
+        .protocol { 
+            color: #007acc; 
+            font-weight: bold; 
+            font-size: 1.1em; 
+        }
+        .http3 { 
+            color: #ff6b35; 
+        }
+        .status {
+            padding: 15px;
+            margin: 10px 0;
+            border-radius: 8px;
+            font-weight: bold;
+        }
+        .status.connected {
+            background: #d4edda;
+            color: #155724;
+            border: 1px solid #c3e6cb;
+        }
+        .status.migrating {
+            background: #fff3cd;
+            color: #856404;
+            border: 1px solid #ffeaa7;
+        }
+        .status.error {
+            background: #f8d7da;
+            color: #721c24;
+            border: 1px solid #f5c6cb;
+        }
+        button { 
+            background: #007acc; 
+            color: white; 
+            border: none; 
+            padding: 12px 20px; 
+            border-radius: 8px; 
+            cursor: pointer; 
+            margin: 5px;
+            font-size: 16px;
+            min-width: 120px;
+        }
+        button:hover { 
+            background: #005a9e; 
+        }
+        button:disabled {
+            background: #ccc;
+            cursor: not-allowed;
+        }
+        .big-button {
+            font-size: 18px;
+            padding: 15px 25px;
+            width: 100%;
+            margin: 10px 0;
+        }
+        #result { 
+            margin-top: 20px; 
+            padding: 15px; 
+            background: #f8f9fa; 
+            border-radius: 8px; 
+            font-family: monospace;
+            font-size: 14px;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .instructions {
+            background: #e7f3ff;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border-left: 4px solid #007acc;
+        }
+        .warning {
+            background: #fff3cd;
+            padding: 15px;
+            border-radius: 8px;
+            margin: 15px 0;
+            border-left: 4px solid #ffc107;
+        }
+        .network-info {
+            background: #f8f9fa;
+            padding: 10px;
+            border-radius: 5px;
+            margin: 10px 0;
+            font-family: monospace;
+            font-size: 13px;
+        }
+        .migration-log {
+            max-height: 200px;
+            overflow-y: auto;
+            background: #2d3748;
+            color: #e2e8f0;
+            padding: 10px;
+            border-radius: 5px;
+            font-family: monospace;
+            font-size: 12px;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>📱 HTTP/3 Connection Migration Test</h1>
+        
+        <div id="status" class="status">Initializing...</div>
+        
+        <div class="instructions">
+            <h3>📋 How to Test Connection Migration:</h3>
+            <ol>
+                <li><strong>Connect to WiFi</strong> on your phone</li>
+                <li><strong>Start the test</strong> below</li>
+                <li><strong>Switch to cellular</strong> (turn off WiFi)</li>
+                <li><strong>Watch for migration detection</strong></li>
+                <li>Try switching back to WiFi</li>
+            </ol>
+        </div>
+        
+        <div class="warning">
+            <strong>⚠️ Important:</strong> Make sure your phone's browser has HTTP/3 enabled:
+            <br>• Chrome: chrome://flags/#enable-quic
+            <br>• Edge: edge://flags/#enable-quic
+        </div>
+
+        <button class="big-button" onclick="startMigrationTest()" id="startBtn">
+            🚀 Start Migration Test
+        </button>
+        
+        <button onclick="stopTest()" id="stopBtn" disabled>Stop Test</button>
+        <button onclick="clearLog()">Clear Log</button>
+        
+        <div class="network-info">
+            <strong>Current Protocol:</strong> <span id="currentProtocol">Checking...</span><br>
+            <strong>Session ID:</strong> <span id="sessionId">None</span><br>
+            <strong>Current IP:</strong> <span id="currentIP">Unknown</span><br>
+            <strong>Migrations Detected:</strong> <span id="migrationCount">0</span>
+        </div>
+        
+        <div id="result"></div>
+        
+        <div class="migration-log" id="migrationLog">
+            <div>Migration test log will appear here...</div>
+        </div>
+    </div>
+    
+    <script>
+        let testInterval;
+        let sessionId = null;
+        let migrationCount = 0;
+        let isTestRunning = false;
+        let lastKnownIP = null;
+        
+        function log(message) {
+            const logDiv = document.getElementById('migrationLog');
+            const timestamp = new Date().toLocaleTimeString();
+            logDiv.innerHTML += `<div>[${timestamp}] ${message}</div>`;
+            logDiv.scrollTop = logDiv.scrollHeight;
+        }
+        
+        function updateStatus(message, type = 'connected') {
+            const statusDiv = document.getElementById('status');
+            statusDiv.textContent = message;
+            statusDiv.className = `status ${type}`;
+        }
+        
+        function clearLog() {
+            document.getElementById('migrationLog').innerHTML = '<div>Migration test log cleared...</div>';
+            document.getElementById('result').innerHTML = '';
+        }
+        
+        async function testMigration() {
+            try {
+                const url = sessionId ? 
+                    `/api/migration?session=${sessionId}` : 
+                    '/api/migration';
+                
+                const start = performance.now();
+                const response = await fetch(url, {
+                    cache: 'no-cache',
+                    headers: {
+                        'Cache-Control': 'no-cache',
+                        'Pragma': 'no-cache'
+                    }
+                });
+                const end = performance.now();
+                
+                if (!response.ok) {
+                    throw new Error(`HTTP ${response.status}`);
+                }
+                
+                const data = await response.json();
+                const responseTime = (end - start).toFixed(0);
+                
+                // Update session info
+                if (!sessionId) {
+                    sessionId = data.session_id;
+                    document.getElementById('sessionId').textContent = sessionId;
+                    log(`🔗 Session started: ${sessionId}`);
+                }
+                
+                // Update current info
+                document.getElementById('currentProtocol').textContent = data.protocol;
+                document.getElementById('currentIP').textContent = data.current_ip;
+                
+                // Check for migration
+                if (data.migration_detected) {
+                    migrationCount++;
+                    document.getElementById('migrationCount').textContent = migrationCount;
+                    log(`🔄 MIGRATION DETECTED! ${lastKnownIP} → ${data.current_ip}`);
+                    updateStatus(`Migration detected! Now on: ${data.current_ip}`, 'migrating');
+                    
+                    // Show big migration notification
+                    setTimeout(() => {
+                        if (isTestRunning) {
+                            updateStatus(`Connected via ${data.protocol}`, 'connected');
+                        }
+                    }, 3000);
+                } else {
+                    updateStatus(`Connected via ${data.protocol} (${responseTime}ms)`, 'connected');
+                }
+                
+                lastKnownIP = data.current_ip;
+                
+                // Log regular status
+                log(`📡 ${data.protocol} | ${data.current_ip} | ${responseTime}ms | Conn: ${data.connection_count}`);
+                
+                // Update detailed result
+                document.getElementById('result').innerHTML = `
+                    <strong>Latest Response:</strong><br>
+                    <pre>${JSON.stringify(data, null, 2)}</pre>
+                `;
+                
+            } catch (error) {
+                log(`❌ Error: ${error.message}`);
+                updateStatus(`Connection error: ${error.message}`, 'error');
+            }
+        }
+        
+        function startMigrationTest() {
+            if (isTestRunning) return;
+            
+            isTestRunning = true;
+            document.getElementById('startBtn').disabled = true;
+            document.getElementById('stopBtn').disabled = false;
+            
+            log('🚀 Starting migration test...');
+            updateStatus('Starting migration test...', 'migrating');
+            
+            // Test immediately, then every 2 seconds
+            testMigration();
+            testInterval = setInterval(testMigration, 2000);
+        }
+        
+        function stopTest() {
+            if (!isTestRunning) return;
+            
+            isTestRunning = false;
+            document.getElementById('startBtn').disabled = false;
+            document.getElementById('stopBtn').disabled = true;
+            
+            if (testInterval) {
+                clearInterval(testInterval);
+                testInterval = null;
+            }
+            
+            log('⏹️ Test stopped');
+            updateStatus('Test stopped', 'error');
+        }
+        
+        // Initial setup
+        window.addEventListener('load', () => {
+            log('📱 Page loaded - Ready for migration testing');
+            updateStatus('Ready for testing', 'connected');
+            
+            // Detect if we're on HTTPS
+            if (location.protocol === 'https:') {
+                log('✅ HTTPS detected - HTTP/3 possible');
+            } else {
+                log('⚠️ HTTP only - HTTP/3 not available');
+                updateStatus('HTTP/3 requires HTTPS', 'error');
+            }
+        });
+        
+        // Handle page visibility changes (when switching apps)
+        document.addEventListener('visibilitychange', () => {
+            if (document.visibilityState === 'visible' && isTestRunning) {
+                log('👁️ Page visible again - resuming tests');
+            } else if (document.visibilityState === 'hidden' && isTestRunning) {
+                log('👁️ Page hidden - tests continuing in background');
+            }
+        });
+        
+        // Handle network changes (if supported)
+        if ('connection' in navigator) {
+            navigator.connection.addEventListener('change', () => {
+                const conn = navigator.connection;
+                log(`📶 Network change detected: ${conn.effectiveType} (${conn.type})`);
+            });
+        }
+    </script>
+</body>
+</html>
