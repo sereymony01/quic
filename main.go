@@ -97,18 +97,17 @@ func main() {
 
 		// Check if this is a new IP for this session
 		isMigration := false
+		ipExists := false
 		for _, ip := range connectionMap[sessionID] {
 			if ip == clientIP {
+				ipExists = true
 				break
 			}
 		}
 
-		if len(connectionMap[sessionID]) > 0 && !isMigration {
-			// Check if IP actually changed
-			lastIP := connectionMap[sessionID][len(connectionMap[sessionID])-1]
-			if lastIP != clientIP {
-				isMigration = true
-			}
+		if len(connectionMap[sessionID]) > 0 && !ipExists {
+			// This is a new IP for this session - migration detected
+			isMigration = true
 		}
 
 		connectionMap[sessionID] = append(connectionMap[sessionID], clientIP)
@@ -116,6 +115,19 @@ func main() {
 		w.Header().Set("Content-Type", "application/json")
 		w.Header().Set("Access-Control-Allow-Origin", "*")
 		w.Header().Set("Cache-Control", "no-cache")
+
+		// Build JSON array for IP history
+		var ipHistoryJSON strings.Builder
+		ipHistoryJSON.WriteString("[")
+		for i, ip := range connectionMap[sessionID] {
+			if i > 0 {
+				ipHistoryJSON.WriteString(",")
+			}
+			ipHistoryJSON.WriteString(`"`)
+			ipHistoryJSON.WriteString(ip)
+			ipHistoryJSON.WriteString(`"`)
+		}
+		ipHistoryJSON.WriteString("]")
 
 		fmt.Fprintf(w, `{
   "session_id": "%s",
@@ -127,7 +139,7 @@ func main() {
   "timestamp": "%s",
   "server_time": %d
 }`, sessionID, protocol, clientIP,
-			fmt.Sprintf("[%s]", strings.Join(connectionMap[sessionID], ", ")),
+			ipHistoryJSON.String(),
 			isMigration, len(connectionMap[sessionID]),
 			time.Now().Format("15:04:05"), time.Now().Unix())
 	})
